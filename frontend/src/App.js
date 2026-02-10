@@ -27,12 +27,15 @@ function App() {
   const handleRepair = async () => {
     if (!dnaInput) return;
 
+    const cleanDna = dnaInput.replace(/[^atcgATCG]/g, "");
+
     setLoading(true);
     setProgress(0);
 
     try {
       const res = await axios.post("http://localhost:8080/api/repair", {
-        sequence: dnaInput
+
+        sequence: cleanDna
       });
 
       if (res.data.success) {
@@ -44,13 +47,15 @@ function App() {
           confidence: res.data.confidence
         });
       }
-    } catch {
-      setRepaired("Error connecting to backend");
-    }
+    } catch (error) {
+        console.error(error); // Look at the browser F12 console!
+        setRepaired(error.response?.data?.repaired || "Connection failed");
+      }
 
     setLoading(false);
     setProgress(100);
   };
+
 
   const downloadFasta = () => {
     const fasta = `>repaired_${Date.now()}\n${repaired}`;
@@ -146,7 +151,7 @@ function App() {
 
           <div className="stat-card">
             <h4>Performance</h4>
-            <p><strong>87.6%</strong></p>
+            <p><strong>82.7%</strong></p>
             <div className="validated-badge">VALIDATED</div>
           </div>
         </div>

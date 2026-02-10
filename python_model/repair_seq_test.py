@@ -5,13 +5,12 @@ import numpy as np
 from Levenshtein import distance
 from collections import defaultdict
 
+from python_model.model_architecture import DNARepairAutoencoder
 from python_model.reconstruct import encode_sequence, decode_sequence, calculate_accuracy, repair_dna
 
 # ================= CONFIG =================
 TEST_CSV = r"D:\FYP\Implementation\data\raw/test_dataset.csv"
 BATCH_SIZE = 64
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 # ================= EVALUATION =================
 def evaluate_test_set():

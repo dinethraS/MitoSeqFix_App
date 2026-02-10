@@ -10,6 +10,7 @@ public class DnaRepairService {
                 "D:\\FYP\\MitoSeqFix_App\\mtDNA_env\\Scripts\\python.exe",
                 "D:\\FYP\\MitoSeqFix_App\\python_model\\repair_single_seq.py"
         );
+        pb.directory();
 
         Process process = pb.start();
 
