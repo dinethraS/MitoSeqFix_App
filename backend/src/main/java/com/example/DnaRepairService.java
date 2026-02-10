@@ -5,9 +5,7 @@ import java.io.*;
 
 @Service
 public class DnaRepairService {
-
     public String repair(String dna) throws Exception {
-
         ProcessBuilder pb = new ProcessBuilder(
                 "D:\\FYP\\MitoSeqFix_App\\mtDNA_env\\Scripts\\python.exe",
                 "D:\\FYP\\MitoSeqFix_App\\python_model\\repair_single_seq.py"
@@ -28,6 +26,14 @@ public class DnaRepairService {
         String line;
         while ((line = reader.readLine()) != null) {
             sb.append(line.trim());
+        };
+
+        BufferedReader errorReader =
+                new BufferedReader(new InputStreamReader(process.getErrorStream()));
+
+        String err;
+        while ((err = errorReader.readLine()) != null) {
+            System.out.println("PYTHON ERROR: " + err);
         }
 
         String result = sb.toString();

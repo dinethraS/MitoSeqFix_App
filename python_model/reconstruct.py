@@ -77,7 +77,7 @@ def encode_sequence(seq):
 # ================= HELPERS =================
 def decode_sequence(encoded):
     mapping = {0: 'A', 1: 'C', 2: 'G', 3: 'T', 4: 'N'}
-    return ''.join(mapping[i] for i in encoded if i < 4)
+    return ''.join(mapping[i] for i in encoded)
 
 
 def calculate_accuracy(clean, repaired):

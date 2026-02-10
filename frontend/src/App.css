@@ -14,3 +14,265 @@ button {
   padding: 10px 20px;
   font-size: 16px;
 }
+
+/* Clinical Dark Theme */
+.clinical-app {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #0a0e1a 0%, #1a2332 100%);
+  color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.clinical-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #334155;
+}
+
+.logo {
+  font-size: 2rem;
+  background: linear-gradient(45deg, #00d4aa, #1e40af);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.badge {
+  background: #00d4aa;
+  color: #0a0e1a;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+.input-section {
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  backdrop-filter: blur(10px);
+}
+
+.file-drop {
+  border: 2px dashed #475569;
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+  margin-bottom: 1rem;
+  transition: all 0.3s ease;
+}
+
+.file-drop:hover { border-color: #00d4aa; }
+
+.file-input { display: block; margin: 0.5rem auto; }
+
+.or-divider {
+  text-align: center;
+  color: #94a3b8;
+  margin: 1rem 0;
+  font-weight: bold;
+}
+
+.dna-textarea {
+  width: 100%;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  color: #e2e8f0;
+  padding: 1rem;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.dna-textarea:focus {
+  outline: none;
+  border-color: #00d4aa;
+  box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.1);
+}
+
+.action-section {
+  text-align: center;
+  margin: 2rem 0;
+}
+
+.repair-btn {
+  background: linear-gradient(45deg, #00d4aa, #059669);
+  color: white;
+  border: none;
+  padding: 1rem 2rem;
+  font-size: 1.1rem;
+  font-weight: bold;
+  border-radius: 50px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 10px 30px rgba(0, 212, 170, 0.3);
+}
+
+.repair-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 40px rgba(0, 212, 170, 0.4);
+}
+
+.repair-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.spinner {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+  margin-right: 0.5rem;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.stat-card {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 1.5rem;
+  backdrop-filter: blur(10px);
+}
+
+.stat-card h4 {
+  margin: 0 0 1rem 0;
+  color: #00d4aa;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+}
+
+.stat-card p {
+  margin: 0.5rem 0;
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+.damage-badge {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+}
+
+.damage-badge.high { background: #fef3c7; color: #92400e; }
+.damage-badge.low { background: #dcfce7; color: #166534; }
+
+.confidence-bar {
+  width: 100%;
+  height: 8px;
+  background: #334155;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 0.5rem;
+}
+
+.confidence-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00d4aa, #1e40af);
+  transition: width 0.5s ease;
+}
+
+.validated-badge {
+  background: #00d4aa;
+  color: #0a0e1a;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  display: inline-block;
+  margin-top: 0.5rem;
+}
+
+.results-section {
+  background: rgba(15, 23, 42, 0.8);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-top: 2rem;
+}
+
+.sequence-container {
+  background: #0f172a;
+  border-radius: 8px;
+  margin: 1rem 0;
+}
+
+.result-textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  padding: 1rem;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  resize: none;
+}
+
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.download-btn {
+  padding: 0.75rem 1rem;
+  border: 1px solid #334155;
+  background: rgba(15, 23, 42, 0.5);
+  color: #e2e8f0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.download-btn:hover {
+  border-color: #00d4aa;
+  background: rgba(0, 212, 170, 0.1);
+}
+
+.download-btn.primary {
+  background: linear-gradient(45deg, #00d4aa, #059669);
+  border-color: #00d4aa;
+}
+
+.clinical-footer {
+  text-align: center;
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid #334155;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.clinical-footer a {
+  color: #00d4aa;
+  text-decoration: none;
+  margin: 0 0.5rem;
+}
+
+.clinical-footer a:hover {
+  text-decoration: underline;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .clinical-app { padding: 1rem; }
+  .dashboard { grid-template-columns: 1fr; }
+  .download-grid { grid-template-columns: 1fr; }
+}
