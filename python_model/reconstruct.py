@@ -40,28 +40,47 @@ def repair_dna(damaged_seq, window_size=1024, overlap=256):
     encoded = encode_sequence(damaged_seq)
 
     if len(encoded) <= window_size:
+        # Single chunk case
         padded = torch.tensor(encoded + [4] * (window_size - len(encoded))).unsqueeze(0).to(device)
         with torch.no_grad():
             output = model(padded)
             pred = torch.argmax(output, dim=-1).squeeze().cpu().numpy()
-        return decode_sequence(pred)
+        return decode_sequence(pred[:len(encoded)])  # Trim padding!
 
-    # Sliding window - PURE model predictions
+    # FIXED Sliding window
     repaired_chunks = []
-    for i in range(0, len(encoded), window_size - overlap):
+    step_size = window_size - overlap  # 768
+
+    for i in range(0, len(encoded), step_size):
         chunk = encoded[i:i + window_size]
-        padded = torch.tensor(chunk + [4] * (window_size - len(chunk))).unsqueeze(0).to(device)
+        padded_chunk = chunk + [4] * (window_size - len(chunk))
+        padded = torch.tensor(padded_chunk).unsqueeze(0).to(device)
+
         with torch.no_grad():
             output = model(padded)
-            pred = torch.argmax(output, dim=-1).squeeze().cpu().numpy()[:len(chunk)]
-        repaired_chunks.append(pred)
+            pred = torch.argmax(output, dim=-1).squeeze().cpu().numpy()
+            repaired_chunk = pred[:len(chunk)]  # Original chunk length
 
-    # Reconstruct
-    final_seq = repaired_chunks[0].tolist()
-    for chunk in repaired_chunks[1:]:
-        final_seq.extend(chunk[window_size - overlap:].tolist())
+        repaired_chunks.append(repaired_chunk)
 
-    return decode_sequence(final_seq)
+    # FIXED RECONSTRUCTION - Full sequence!
+    final_seq = repaired_chunks[0]
+    for i in range(1, len(repaired_chunks)):
+        # Overlap region: take from previous chunk (more stable)
+        overlap_start = len(final_seq) - overlap
+        overlap_end = overlap_start + overlap
+        new_chunk_start = len(repaired_chunks[i]) - (len(encoded) - i)
+
+        if not isinstance(final_seq, np.ndarray):
+            final_seq = np.array(final_seq)
+
+        chunk_part = repaired_chunks[i][overlap:]
+        if isinstance(chunk_part, list):
+            chunk_part = np.array(chunk_part)
+
+        final_seq = np.concatenate([final_seq, chunk_part])
+
+    return decode_sequence(final_seq[:len(encoded)])
 
 def has_damage(seq):
     seq_lower = seq.lower()

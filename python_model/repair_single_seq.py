@@ -135,7 +135,7 @@ def repair_dna(damaged_seq, window_size=1024, overlap=256):
 
         final_seq = np.concatenate([final_seq, chunk_part])
 
-    return decode_sequence(final_seq[:len(encoded)])  # Match input length!
+    return decode_sequence(final_seq[:len(encoded)])
 
 
 def has_damage(seq):

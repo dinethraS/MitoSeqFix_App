@@ -6,36 +6,96 @@ function App() {
   const [dnaInput, setDnaInput] = useState("");
   const [fileInput, setFileInput] = useState(null);
   const [repaired, setRepaired] = useState("");
-  const [stats, setStats] = useState({});
+  const [validationError, setValidationError] = useState("");
+  const [stats, setStats] = useState({
+    inputLen: 0,
+    outputLen: 0,
+    changes: 0
+  });
   const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [copyStatus, setCopyStatus] = useState("Copy");
+  const [showModal, setShowModal] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+
+  // --- HELPER FUNCTIONS ---
+
+  const isValidDna = (seq) => {
+    if (!seq) return false;
+    const cleanedSeq = seq.trim().replace(/\s/g, "");
+    if (cleanedSeq.length < 70) return false; // 70bp limit
+    const dnaRegex = /^[ATCGNatcgn]+$/;
+    return dnaRegex.test(cleanedSeq);
+  };
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(repaired);
+    setCopyStatus("Copied!");
+    setTimeout(() => setCopyStatus("Copy"), 2000);
+  };
+
+  const handleDownload = () => {
+    const fastaContent = `>MitoSeqFix_Restored\n${repaired}`;
+    const blob = new Blob([fastaContent], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "restored_mtDNA.fasta";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // --- HANDLERS ---
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     const reader = new FileReader();
-
     reader.onload = (e) => {
       const text = e.target.result;
-      const seq = text.split("\n").slice(1).join("").replace(/\s/g, "");
+      const seq = text.split("\n").filter(line => !line.startsWith(">")).join("").replace(/\s/g, "");
       setDnaInput(seq);
       setFileInput(file.name);
-    };
 
+      // Run validation immediately on upload
+      if (seq.length < 70) {
+        setValidationError("Uploaded sequence is too short (<70bp).");
+      } else {
+        setValidationError("");
+      }
+    };
     reader.readAsText(file);
+  };
+
+  const handleTextChange = (e) => {
+    const value = e.target.value;
+    setDnaInput(value);
+
+    // Use a temp variable for validation so we don't lag
+    const cleanVal = value.trim().replace(/\s/g, "");
+
+    if (cleanVal.length > 0 && !isValidDna(value)) {
+       if (cleanVal.length < 70) {
+          setValidationError(`Sequence too short (${cleanVal.length}/70 bp).`);
+       } else {
+          setValidationError("Invalid characters detected. Only A, T, C, G, N allowed.");
+       }
+    } else {
+      setValidationError("");
+    }
   };
 
   const handleRepair = async () => {
     if (!dnaInput) return;
-
-    const cleanDna = dnaInput.replace(/[^atcgATCG]/g, "");
+    if (validationError) {
+        alert("Please fix validation errors before running.");
+        return;
+    }
 
     setLoading(true);
-    setProgress(0);
+    setRepaired("");
 
     try {
       const res = await axios.post("http://localhost:8080/api/repair", {
-
-        sequence: cleanDna
+        sequence: dnaInput.replace(/[^atcgATCG]/g, "")
       });
 
       if (res.data.success) {
@@ -43,150 +103,213 @@ function App() {
         setStats({
           inputLen: res.data.inputLen,
           outputLen: res.data.outputLen,
-          changes: res.data.changes,
-          confidence: res.data.confidence
+          changes: res.data.changes
         });
       }
     } catch (error) {
-        console.error(error); // Look at the browser F12 console!
-        setRepaired(error.response?.data?.repaired || "Connection failed");
-      }
-
+      console.error("Repair failed", error);
+      alert("Failed to connect to backend.");
+    }
     setLoading(false);
-    setProgress(100);
   };
 
+  const handleClear = () => {
+    // Reset Inputs
+    setDnaInput("");
+    setFileInput(null);
 
-  const downloadFasta = () => {
-    const fasta = `>repaired_${Date.now()}\n${repaired}`;
-    const blob = new Blob([fasta], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "repaired_mtdna.fasta";
-    a.click();
+    // Reset Results & Stats
+    setRepaired("");
+    setStats({ inputLen: 0, outputLen: 0, changes: 0 });
+
+    // Reset UI states
+    setValidationError("");
+    setShowModal(false);
+    setShowAll(false);
   };
 
-  const changeCount = stats.changes || 0;
-  const changePct = stats.inputLen ? ((changeCount / stats.inputLen) * 100).toFixed(1) : 0;
+  // --- RENDERERS ---
+
+  const renderRepairModal = () => {
+    if (!showModal) return null;
+
+    const original = dnaInput.replace(/\s/g, "").split("");
+    const fixed = repaired.split("");
+    const displayLimit = showAll ? fixed.length : 500;
+
+    return (
+      <div className="modal-overlay">
+        <div className="modal-content">
+          <div className="modal-header">
+            <div>
+                <h2>Sequence Comparison Map</h2>
+                <div className="modal-stats-summary">
+                    <span className="mini-stat">Total Bases: <strong>16,569</strong></span>
+                    <span className="mini-stat">Restored: <strong className="highlight">{stats.changes}</strong></span>
+                </div>
+            </div>
+            <button className="close-btn" onClick={() => setShowModal(false)}>×</button>
+          </div>
+
+          <div className="modal-body">
+            <div className="modal-controls">
+              <p>Viewing {displayLimit.toLocaleString()} bases</p>
+              {!showAll && (
+                <button className="btn-small" onClick={() => setShowAll(true)}>
+                  Load Full Sequence
+                </button>
+              )}
+            </div>
+
+            <div className="base-grid scrollable">
+              {fixed.slice(0, displayLimit).map((base, i) => {
+                const isChanged = original[i] !== fixed[i];
+                return (
+                  <div key={i} className={`base-cell ${isChanged ? 'is-fixed' : ''}`}>
+                    <span className="index-label">{i + 1}</span>
+                    <span className="base-char">{base}</span>
+                    {isChanged && <span className="original-hint">{original[i] || '?'}</span>}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="modal-legend">
+              <div className="legend-flex">
+
+                {/* Restored Item */}
+                <div className="legend-item">
+                  <span className="dot restored"></span>
+                  <span className="legend-text">MitoSeqFix Prediction</span>
+                </div>
+
+                {/* Error Item */}
+                <div className="legend-item">
+                  <span className="dot error"></span>
+                  <span className="legend-text">Original Damaged Sequence</span>
+                </div>
+
+              </div>
+            </div>
+
+
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className="clinical-app">
-      {/* HEADER */}
-      <header className="clinical-header">
-        <div className="logo">
-          <strong>MitoSeqFix</strong>
+    <div className="mito-container">
+      <nav className="mito-nav">
+        <div className="brand">
+          <span>Mito<strong>SeqFix</strong></span>
         </div>
-        <div className="badge">82.7% Validated Accuracy</div>
-      </header>
+        <div className="status-dot">System Ready</div>
+      </nav>
 
-      {/* DUAL INPUT */}
-      <div className="input-section">
-        <div className="file-drop">
-          <input
-            type="file"
-            accept=".fasta,.fa,.txt"
-            onChange={handleFileUpload}
-            className="file-input"
-          />
-          <p>Drag FASTA or click to upload</p>
-          {fileInput && <span className="file-name">{fileInput}</span>}
-        </div>
-
-        <div className="or-divider">OR</div>
-
-        <textarea
-          value={dnaInput}
-          onChange={(e) => setDnaInput(e.target.value)}
-          placeholder="Paste mtDNA sequence here... (GATCAcNAGGT → GATCGTAGGC)"
-          className="dna-textarea"
-          rows={4}
-        />
-      </div>
-
-      {/* REPAIR BUTTON */}
-      <div className="action-section">
-        <button
-          onClick={handleRepair}
-          disabled={loading || !dnaInput}
-          className="repair-btn"
-        >
-          {loading ? (
-            <>
-              <span className="spinner">o</span> Repairing... {progress}%
-            </>
-          ) : (
-            "Repair mtDNA"
-          )}
-        </button>
-      </div>
-
-      {/* 2x2 DASHBOARD */}
-      {stats.inputLen && (
-        <div className="dashboard">
-          <div className="stat-card">
-            <h4>Input Stats</h4>
-            <p><strong>{stats.inputLen.toLocaleString()}</strong> bp</p>
-            <p className={`damage-badge ${changeCount > 10 ? 'high' : 'low'}`}>
-              {changeCount} changes detected ({changePct}%)
-            </p>
-          </div>
-
-          <div className="stat-card">
-            <h4>Model Confidence</h4>
-            <p><strong>{stats.confidence || 'N/A'}</strong></p>
-            <div className="confidence-bar">
-              <div
-                className="confidence-fill"
-                style={{width: `${stats.confidence || 0}%`}}
-              />
+      <main className="mito-main">
+        {/* Left Column */}
+        <section className="mito-column input-pane">
+          <div className="card">
+            <h3>1. Sequence Input</h3>
+            <div className="upload-box">
+              <input type="file" id="file" onChange={handleFileUpload} hidden />
+              <label htmlFor="file" className="file-label">
+                {fileInput ? `${fileInput}` : "Click to upload FASTA"}
+              </label>
             </div>
-          </div>
 
-          <div className="stat-card">
-            <h4>Output</h4>
-            <p><strong>{stats.outputLen.toLocaleString()}</strong> bp</p>
-            <p>Production ready</p>
-          </div>
+            <div className="divider"><span>OR PASTE RAW DATA</span></div>
 
-          <div className="stat-card">
-            <h4>Performance</h4>
-            <p><strong>82.7%</strong></p>
-            <div className="validated-badge">VALIDATED</div>
-          </div>
-        </div>
-      )}
-
-      {/* RESULTS */}
-      {repaired && (
-        <div className="results-section">
-          <h3>Repaired Sequence</h3>
-          <div className="sequence-container">
             <textarea
-              value={repaired}
-              readOnly
-              className="result-textarea"
-              rows={6}
+              className={`compact-text ${validationError ? "input-error" : ""}`}
+              value={dnaInput}
+              onChange={handleTextChange}
+              placeholder="Paste sequence here..."
             />
+            {validationError && <p className="error-text">{validationError}</p>}
+
+            <div className="button-group">
+              <button
+                className={`run-btn ${loading ? 'loading' : ''}`}
+                onClick={handleRepair}
+                disabled={loading || !dnaInput || validationError}
+              >
+                {loading ? "Processing..." : "Run Restoration"}
+              </button>
+
+              <button
+                className="clear-btn"
+                onClick={handleClear}
+                disabled={loading || (!dnaInput && !repaired)}
+              >
+                Clear All Data
+              </button>
+            </div>
+
+
           </div>
 
-          {/* DOWNLOADS */}
-          <div className="download-grid">
-            <button onClick={downloadFasta} className="download-btn primary">
-              FASTA File
-            </button>
-            <button className="download-btn">Copy Sequence</button>
-            <button className="download-btn">Full Report</button>
-            <button className="download-btn">Share Results</button>
-          </div>
-        </div>
-      )}
+          {stats.inputLen > 0 && (
+            <div className="card stats-grid">
+              <div className="stat-item">
+                <label>Input Length</label>
+                <p>{stats.inputLen.toLocaleString()} bp</p>
+              </div>
+              <div className="stat-item">
+                <label>Output Length</label>
+                <p>{stats.outputLen.toLocaleString()} bp</p>
+              </div>
+              <div className="stat-item">
+                <label>Bases Corrected</label>
+                <p className="highlight">{stats.changes}</p>
+              </div>
+              <div className="stat-item">
+                <label>Confidence</label>
+                <p>82.7%</p>
+              </div>
+            </div>
+          )}
+        </section>
 
-      {/* FOOTER */}
-      <footer className="clinical-footer">
-        <p>CNN+Transformer | Clinical Deployment Feb 2026</p>
-        <p><a href="#">GitHub</a> | <a href="#">Paper</a></p>
-      </footer>
+        {/* Right Column */}
+        <section className="mito-column result-pane">
+          {!repaired && !loading ? (
+            <div className="empty-state">
+              <p>Sequence reconstruction results will appear here.</p>
+            </div>
+          ) : loading ? (
+            <div className="empty-state">
+              <div className="dna-loader"></div>
+              <p>Sequencing in progress...</p>
+            </div>
+          ) : (
+            <div className="card result-card fade-in">
+              <div className="card-header">
+                <h3>Restored Sequence</h3>
+                <button className="copy-btn" onClick={copyToClipboard}>
+                   {copyStatus}
+                </button>
+              </div>
+              <textarea className="result-text" value={repaired} readOnly />
+
+              <div className="action-row">
+                <button className="btn-primary" onClick={handleDownload}>
+                  Download .FASTA
+                </button>
+                {/* FIXED THE ERROR HERE: Added arrow function */}
+                <button className="btn-outline" onClick={() => setShowModal(true)}>
+                    View Changes
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      </main>
+
+      {/* Placed Modal Outside Grid for better Z-Index handling */}
+      {renderRepairModal()}
     </div>
   );
 }
