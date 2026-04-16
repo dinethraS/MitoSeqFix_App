@@ -1,0 +1,2145 @@
+!pip install biopython scikit-learn
+
+import random
+import pandas as pd
+import time
+import os
+from Bio import Entrez, SeqIO
+from sklearn.model_selection import train_test_split  # For splitting dataset into train/val/test
+
+# -----------------------------
+# Download Clean mtDNA Sequences
+# -----------------------------
+Entrez.email = "dinethrawickramnasekera@gmail.com"  #
+
+batch_size = 50               # Number of sequences to fetch at a time
+sequences = []                # List to store downloaded sequences
+
+# Search for all complete human mitochondrial genomes in NCBI
+handle = Entrez.esearch(
+    db="nuccore",  # Nucleotide database
+    term="Homo sapiens[Organism] AND mitochondrion[Title] AND complete genome",  # Search query
+    retmax=65819  # Number of records to retrieve
+)
+record = Entrez.read(handle)  # Parse search results
+ids = record["IdList"]        # List of sequence IDs
+print(f"Found {len(ids)} human mtDNA genomes")  # Print total found
+
+# Fetch sequences in batches
+for start in range(0, len(ids), batch_size):
+    end = min(start + batch_size, len(ids))  # Compute end of batch
+    batch_ids = ids[start:end]               # Slice IDs for this batch
+
+    # Fetch sequences in FASTA format
+    fetch = Entrez.efetch(db="nuccore", id=batch_ids, rettype="fasta", retmode="text")
+
+    # Parse each sequence and append to the list
+    for seq_record in SeqIO.parse(fetch, "fasta"):
+        sequences.append(seq_record)
+    fetch.close()  # Close fetch connection
+
+    print(f"Downloaded {len(sequences)} / {len(ids)}")  # Progress update
+    time.sleep(0.5)  # Sleep to avoid overloading NCBI server
+
+print(f"Downloaded {len(sequences)} clean mtDNA sequences")  # Total downloaded
+
+# Save sequences to CSV
+clean_df = pd.DataFrame({'seq': [str(s.seq).upper() for s in sequences]})  # Convert sequences to uppercase strings
+clean_df.to_csv('clean_mtdna_sequences.csv', index=False)  # Save CSV
+print("Clean sequences saved!")  # Confirmation
+
+# -----------------------------
+# Define Biologically Accurate Damage Patterns
+# -----------------------------
+# Pattern 1: Cytosine deamination (C→T dominant, ancient DNA damage)
+def pattern_1_cytosine_deamination(seq, base_prob=0.25, end_boost=1.5, end_len=20):
+    """
+    Simulates ancient DNA damage:
+    - C→T is dominant, especially at the ends of sequences
+    """
+    damaged = []
+    L = len(seq)
+    for i, base in enumerate(seq):
+        prob = base_prob
+        if i < end_len or i > L - end_len:
+            prob += end_boost  # Increase probability at sequence ends
+        if base == 'C' and random.random() < prob:
+            damaged.append('T')
+        elif base == 'G' and random.random() < prob * 0.45:
+            damaged.append('A')  # Less frequent complementary damage
+        else:
+            damaged.append(base)
+    return ''.join(damaged), "deamination_CtoT"  # Return damaged sequence + label
+
+# Pattern 2: Oxidative damage (G→T, C→A)
+def pattern_2_oxidative_damage(seq, prob=0.08):
+    """Simulates oxidative stress damage"""
+    map_ox = {'G': ['T'], 'C': ['A']}  # Damage map
+    damaged = [random.choice(map_ox[base]) if base in map_ox and random.random() < prob
+               else base for base in seq]
+    return ''.join(damaged), "oxidative"
+
+# Pattern 3: Clustered deletions (replication slippage)
+def pattern_3_clustered_deletions(seq, del_prob=0.008, cluster_boost=0.06):
+    """Introduce deletions in clusters"""
+    damaged, prev_del = [], False
+    for base in seq:
+        p = del_prob + (cluster_boost if prev_del else 0)  # Increase probability after a deletion
+        if random.random() < p:
+            prev_del = True
+            continue  # Skip base → deletion
+        damaged.append(base)
+        prev_del = False
+    return ''.join(damaged), "deletions"
+
+# Pattern 4: Fragmentation + N gaps
+def pattern_4_fragmentation_n(seq, frag_prob=0.015, min_frag=40, max_frag=80, n_prob=0.03):
+    """Simulate fragmented DNA and N gaps"""
+    fragments, current = [], []
+    for base in seq:
+        current.append(base)
+        if len(current) >= min_frag and random.random() < frag_prob:
+            fragments.append(''.join(current))
+            current = []
+        if len(current) > max_frag:
+            fragments.append(''.join(current))
+            current = []
+    full = ''.join(fragments) if fragments else seq
+
+    # Introduce random Ns
+    damaged = ['N' if random.random() < n_prob else b for b in full]
+    return ''.join(damaged), "fragmentation_N"
+
+# List of all patterns for easy iteration
+PATTERNS = [pattern_1_cytosine_deamination, pattern_2_oxidative_damage,
+            pattern_3_clustered_deletions, pattern_4_fragmentation_n]
+
+# -----------------------------
+# Generate Train/Val/Test Split CSVs
+# -----------------------------
+def generate_split_csvs(clean_csv, output_dir):
+    os.makedirs(output_dir, exist_ok=True)  # Make output directory if it doesn't exist
+
+    df = pd.read_csv(clean_csv)           # Load clean sequences
+    sequences = df['seq'].tolist()        # Convert to list
+    print(f"Processing {len(sequences)} clean sequences")
+
+    # 80% train, 6% validation, 14% test
+    train_seqs, temp_seqs = train_test_split(sequences, train_size=0.8, random_state=42)
+    val_seqs, test_seqs = train_test_split(temp_seqs, train_size=0.06/0.2, random_state=42)
+
+    splits = {'train': train_seqs, 'val': val_seqs, 'test': test_seqs}
+
+    # Apply damage patterns and save each split
+    for split_name, seqs in splits.items():
+        all_damaged, all_clean, all_types = [], [], []
+        for clean in seqs:
+            for i, pattern in enumerate(PATTERNS):
+                damaged, dtype = pattern(clean)  # Apply damage
+                all_damaged.append(damaged)
+                all_clean.append(clean)
+                all_types.append(f"{dtype}_p{i+1}")  # Label pattern type
+
+        # Create DataFrame for split
+        split_df = pd.DataFrame({
+            'damaged': all_damaged,
+            'clean': all_clean,
+            'damage_type': all_types
+        })
+
+        csv_path = os.path.join(output_dir, f"{split_name}_dataset.csv")  # Output path
+        split_df.to_csv(csv_path, index=False)  # Save CSV
+        print(f"{split_name}: {len(seqs)} × 4 = {len(split_df):,} pairs → {csv_path}")
+
+# Run splitter
+output_dir = "data/splits"
+generate_split_csvs('clean_mtdna_sequences.csv', output_dir)
+
+# -----------------------------
+# Backup to Google Drive (Colab)
+# -----------------------------
+from google.colab import drive
+drive.mount('/drive')  # Mount Google Drive
+
+!cp -r data/splits /drive/MyDrive/  # Copy split datasets to Drive
+print("All done! Use data/splits/train_dataset.csv for training")
+
+
+# ─────────────────────────────────────────────────────────────
+# Install & Mount Drive
+# ─────────────────────────────────────────────────────────────
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+import os, torch
+print(f"GPU available: {torch.cuda.is_available()}")
+print(f"Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+
+path = "/content/drive/MyDrive/MitoSeqFix/cl_models_v2/"
+if os.path.exists(path):
+    print("Connection Successful!")
+    print(f"Total checkpoints found: {len(os.listdir(path))}")
+    files    = os.listdir(path)
+    s2_files = [f for f in files if "stage2" in f]
+    if s2_files:
+        print(f"Latest S2 file: {sorted(s2_files)[-1]}")
+    else:
+        print("No Stage 2 checkpoints yet.")
+else:
+    print("Path not found.")
+
+# ─────────────────────────────────────────────────────────────
+# All Imports & Config
+# ─────────────────────────────────────────────────────────────
+
+import os, random, glob
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
+
+# ── Paths ──────────────────────────────────────────────────
+TRAIN_CSV      = "/content/drive/MyDrive/MitoSeqFix/splits/train_dataset.csv"
+VAL_CSV        = "/content/drive/MyDrive/MitoSeqFix/splits/val_dataset.csv"
+MODEL_SAVE_DIR = "/content/drive/MyDrive/MitoSeqFix/cl_models_v2/"
+os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+
+# ── Config ─────────────────────────────────────────────────
+MAX_LEN            = 1024
+BATCH_SIZE         = 32
+EMBED_DIM          = 256
+NUM_HEADS          = 8
+NUM_ATTN_LAYERS    = 3     # stacked gated attention layers
+                           # Layer 1: local base damage
+                           # Layer 2: regional end-damage patterns
+                           # Layer 3: global fragment quality
+NUM_DAMAGE_CLASSES = 4
+VOCAB_SIZE         = 5
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using: {device}")
+
+CURRENT_SPARSITY_PROB = 0.0
+
+# ── Curriculum ─────────────────────────────────────────────
+# Stage 1 (0%):  10 epochs
+# Stage 2 (20%):  6 epochs
+# Stage 3 (40%):  7 epochs
+# Stage 4 (60%): 10 epochs
+
+CURRICULUM_STAGES = [
+    (1,  10, 0.00),
+    (11, 16, 0.20),
+    (17, 23, 0.40),
+    (24, 33, 0.60),
+]
+STAGE_START_EPOCHS = {start for start, _, _ in CURRICULUM_STAGES}
+TOTAL_EPOCHS = 33
+
+# Steps per stage — scales with difficulty
+STEPS_PER_STAGE = {
+    1: 2500,
+    2: 2500,
+    3: 3000,
+    4: 3000,
+}
+
+# ── Per-stage diagnosis loss weight ───────────────────────
+# Stage 1: diag hits 100% val quickly — keep gentle.
+# Stages 2-6: boost hard. Diag anchors repair during sparsity shock.
+STAGE_DW = {
+    1: 0.10,
+    2: 0.35,
+    3: 0.35,
+    4: 0.38,
+}
+
+# ── Per-stage peak learning rate ──────────────────────────
+# Fresh cosine restart each stage, decays to 5% of peak.
+STAGE_LR = {
+    1: 5e-4,
+    2: 3e-4,
+    3: 2e-4,
+    4: 8e-5,
+}
+
+print("Config loaded.")
+print(f"Model: EMBED_DIM={EMBED_DIM}, NUM_ATTN_LAYERS={NUM_ATTN_LAYERS}")
+print(f"Total epochs: {TOTAL_EPOCHS}")
+
+# ─────────────────────────────────────────────────────────────
+# Curriculum Learning DNA Dataset
+# ─────────────────────────────────────────────────────────────
+
+class CurriculumDNADataset(Dataset):
+    """
+    Custom PyTorch Dataset for curriculum-based mtDNA repair training.
+
+    Each sample contains:
+        - Damaged DNA sequence (model input)
+        - Clean DNA sequence (repair target)
+        - Damage type label (diagnosis task)
+
+    The dataset supports:
+        • Fixed-length sequence encoding
+        • Random window sampling for long sequences
+        • Dynamic sparsity injection for curriculum learning
+    """
+
+    def __init__(self, csv_path, max_len=1024):
+        """
+        Initialize dataset from CSV file.
+
+        Args:
+            csv_path (str): Path to dataset CSV file.
+            max_len (int): Maximum sequence length used by the model.
+        """
+
+        # Load dataset
+        self.df = pd.read_csv(csv_path)
+
+        # Maximum sequence length after padding/truncation
+        self.max_len = max_len
+
+        # DNA base-to-integer encoding scheme
+        # N represents unknown / masked bases
+        self.base_map = {
+            'A': 0,
+            'C': 1,
+            'G': 2,
+            'T': 3,
+            'N': 4
+        }
+
+        # Create numerical mapping for damage classification labels
+        unique_types = sorted(self.df['damage_type'].unique())
+        self.label_map = {t: i for i, t in enumerate(unique_types)}
+
+        # Display label mapping for verification
+        print(f"Label map: {self.label_map}")
+
+    # ─────────────────────────────────────────────────────────
+    # Sequence Encoding
+    # ─────────────────────────────────────────────────────────
+    def encode(self, seq):
+        """
+        Convert DNA string into fixed-length integer tensor.
+
+        Steps:
+            1. Map bases to integer tokens.
+            2. Pad shorter sequences using 'N'.
+            3. Truncate sequences exceeding max length.
+        """
+
+        enc = [self.base_map.get(b.upper(), 4) for b in seq]
+
+        # Pad sequence if shorter than required length
+        if len(enc) < self.max_len:
+            enc += [4] * (self.max_len - len(enc))
+
+        # Ensure fixed input length
+        return enc[:self.max_len]
+
+    # ─────────────────────────────────────────────────────────
+    # Dataset Size
+    # ─────────────────────────────────────────────────────────
+    def __len__(self):
+        """Return total number of samples."""
+        return len(self.df)
+
+    # ─────────────────────────────────────────────────────────
+    # Sample Retrieval
+    # ─────────────────────────────────────────────────────────
+    def __getitem__(self, idx):
+        """
+        Retrieve a single training sample.
+
+        Returns:
+            damaged_tensor : Input sequence with degradation
+            clean_tensor   : Ground truth repaired sequence
+            label_tensor   : Damage classification label
+        """
+
+        row = self.df.iloc[idx]
+
+        clean_full   = str(row['clean'])
+        damaged_full = str(row['damaged'])
+        damage_type  = str(row['damage_type'])
+
+        # -----------------------------------------------------
+        # Random Window Sampling
+        # -----------------------------------------------------
+        # Long sequences are randomly cropped to increase
+        # training diversity and reduce positional bias.
+        L = len(clean_full)
+
+        if L > self.max_len:
+            s = random.randint(0, L - self.max_len)
+            clean_str   = clean_full[s:s + self.max_len]
+            damaged_str = damaged_full[s:s + self.max_len]
+        else:
+            clean_str, damaged_str = clean_full, damaged_full
+
+        # Encode sequences as tensors
+        c = torch.tensor(self.encode(clean_str),   dtype=torch.long)
+        d = torch.tensor(self.encode(damaged_str), dtype=torch.long)
+
+        # -----------------------------------------------------
+        # Curriculum Sparsity Injection
+        # -----------------------------------------------------
+        # During training, additional masking is applied
+        # according to the current curriculum difficulty level.
+        if CURRENT_SPARSITY_PROB > 0:
+            d[torch.rand(self.max_len) < CURRENT_SPARSITY_PROB] = 4
+
+        # Convert damage type into classification label
+        label = self.label_map.get(damage_type, 0)
+
+        return d, c, torch.tensor(label, dtype=torch.long)
+
+
+# ─────────────────────────────────────────────────────────────
+# Dataset Initialization
+# ─────────────────────────────────────────────────────────────
+
+# Create training and validation datasets
+train_ds = CurriculumDNADataset(TRAIN_CSV, MAX_LEN)
+val_ds   = CurriculumDNADataset(VAL_CSV,   MAX_LEN)
+
+# DataLoaders handle batching, shuffling, and parallel loading
+train_loader = DataLoader(
+    train_ds,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=2,
+    pin_memory=True
+)
+
+val_loader = DataLoader(
+    val_ds,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=2,
+    pin_memory=True
+)
+
+# Display total number of samples in each dataset split
+print(f"Train: {len(train_ds):,} | Val: {len(val_ds):,}")
+
+# ─────────────────────────────────────────────────────────────
+# Model Architecture
+# ─────────────────────────────────────────────────────────────
+
+
+# ==============================================================
+# Learnable Confidence Gate
+# ==============================================================
+
+class LearnableConfidenceGate(nn.Module):
+    """
+    Novel input-dependent sparsity mechanism.
+
+    The gate estimates a confidence score for each sequence
+    position based on the current feature representation.
+    Positions below a learned threshold are suppressed during
+    attention computation.
+
+    Unlike fixed sparse transformers (e.g., window or random
+    attention patterns), sparsity here is dynamically learned
+    from data and recalibrated at every stacked layer.
+
+    Each layer learns an independent suppression behaviour,
+    enabling hierarchical refinement of sequence quality.
+    """
+
+    def __init__(self, embed_dim: int):
+        super().__init__()
+
+        # Small MLP used to predict per-position confidence
+        self.gate = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 4),
+            nn.ReLU(),
+            nn.Linear(embed_dim // 4, 1),
+            nn.Sigmoid()
+        )
+
+        # Learnable suppression threshold (initially permissive)
+        self.threshold = nn.Parameter(torch.tensor(0.2))
+
+    def forward(self, x: torch.Tensor):
+        """
+        Returns:
+            scores : confidence values per position (B, L, 1)
+            mask   : boolean suppression mask for attention
+        """
+
+        scores = self.gate(x)
+
+        # Clamp threshold to prevent degenerate behaviour
+        thr = self.threshold.clamp(0.05, 0.95)
+
+        mask = (scores < thr).squeeze(-1)
+        return scores, mask
+
+
+# ==============================================================
+# Confidence-Gated Attention Layer
+# ==============================================================
+
+class ConfidenceGatedAttentionLayer(nn.Module):
+    """
+    Single hierarchical processing unit.
+
+    Structure:
+        LayerNorm → Confidence Gate → Multi-Head Attention
+        → Residual Connection → Feedforward Network → Residual
+
+    Pre-normalisation improves optimisation stability under
+    high sparsity where many tokens may be masked.
+    """
+
+    def __init__(self, embed_dim: int, num_heads: int):
+        super().__init__()
+
+        # Pre-normalisation
+        self.norm = nn.LayerNorm(embed_dim)
+
+        # Learnable sparsity controller
+        self.conf_gate = LearnableConfidenceGate(embed_dim)
+
+        # Self-attention mechanism
+        self.attention = nn.MultiheadAttention(
+            embed_dim,
+            num_heads,
+            batch_first=True
+        )
+
+        # Position-wise feedforward block
+        self.ff = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 2),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(embed_dim * 2, embed_dim),
+        )
+
+        self.ff_norm = nn.LayerNorm(embed_dim)
+
+    def forward(self, x: torch.Tensor):
+
+        # Normalise representations before gating
+        normed = self.norm(x)
+
+        # Obtain confidence scores and suppression mask
+        scores, mask = self.conf_gate(normed)
+
+        # Safety mechanism:
+        # ensure at least one token remains visible
+        all_masked = mask.all(dim=1, keepdim=True)
+        mask = mask & ~all_masked
+
+        # Self-attention with gated sparsity
+        attn_out, _ = self.attention(
+            normed,
+            normed,
+            normed,
+            key_padding_mask=mask
+        )
+
+        # Residual updates
+        x = x + attn_out
+        x = x + self.ff(self.ff_norm(x))
+
+        return x, scores
+
+
+# ==============================================================
+# Dual-Mode Mitochondrial DNA Model
+# ==============================================================
+
+class DualModeMitoModel(nn.Module):
+    """
+    Hybrid CNN–Transformer architecture for degraded mtDNA analysis.
+
+    Pipeline:
+        Embedding → Dilated CNN Backbone →
+        Stacked Confidence-Gated Attention →
+        Dual Prediction Heads
+
+    Tasks:
+        1. Repair Head:
+           Predict corrected nucleotide at each position.
+
+        2. Diagnosis Head:
+           Classify overall damage type of the sequence.
+
+    Hierarchical interpretation of stacked gates:
+        Layer 1 → Local base damage detection
+        Layer 2 → Regional degradation patterns
+        Layer 3 → Global fragment quality estimation
+    """
+
+    def __init__(self,
+                 vocab_size:         int = VOCAB_SIZE,
+                 embed_dim:          int = EMBED_DIM,
+                 num_heads:          int = NUM_HEADS,
+                 num_attn_layers:    int = NUM_ATTN_LAYERS,
+                 num_damage_classes: int = NUM_DAMAGE_CLASSES):
+
+        super().__init__()
+
+        # ------------------------------------------------------
+        # Token Embedding
+        # ------------------------------------------------------
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+
+        # ------------------------------------------------------
+        # Dilated CNN Backbone
+        # Captures local damage motifs at multiple receptive
+        # field scales before global attention.
+        # ------------------------------------------------------
+        self.cnn_backbone = nn.Sequential(
+            nn.Conv1d(embed_dim, 128, kernel_size=7, padding=3, dilation=1),
+            nn.GELU(),
+            nn.Conv1d(128, 256, kernel_size=5, padding=4, dilation=2),
+            nn.GELU(),
+            nn.Conv1d(256, embed_dim, kernel_size=3, padding=4, dilation=4),
+            nn.GELU(),
+        )
+
+        # ------------------------------------------------------
+        # Stacked Confidence-Gated Attention Layers
+        # ------------------------------------------------------
+        self.gated_layers = nn.ModuleList([
+            ConfidenceGatedAttentionLayer(embed_dim, num_heads)
+            for _ in range(num_attn_layers)
+        ])
+
+        # ------------------------------------------------------
+        # Repair Head (Token-Level Prediction)
+        # ------------------------------------------------------
+        self.repair_head = nn.Linear(embed_dim, vocab_size)
+
+        # ------------------------------------------------------
+        # Diagnosis Head (Sequence-Level Classification)
+        # ------------------------------------------------------
+        self.diag_head = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(embed_dim, 128),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, num_damage_classes)
+        )
+
+    def forward(self, x: torch.Tensor):
+        """
+        Returns:
+            repair_logits   : (B, L, vocab_size)
+            diag_logits     : (B, num_damage_classes)
+            conf_scores_all : confidence scores from all gates
+        """
+
+        # Embedding
+        x = self.embedding(x)
+
+        # CNN expects channel-first format
+        x = x.permute(0, 2, 1)
+        x = self.cnn_backbone(x)
+
+        # Return to sequence-first representation
+        x = x.permute(0, 2, 1)
+
+        # Hierarchical gated attention processing
+        conf_scores_all = []
+        for layer in self.gated_layers:
+            x, scores = layer(x)
+            conf_scores_all.append(scores)
+
+        # Repair prediction
+        repair_logits = self.repair_head(x)
+
+        # Diagnosis prediction
+        diag_input = x.permute(0, 2, 1)
+        diag_logits = self.diag_head(diag_input)
+
+        return repair_logits, diag_logits, conf_scores_all
+
+
+# ==============================================================
+# Model Sanity Check
+# ==============================================================
+
+# Instantiate model and verify output dimensions
+_m = DualModeMitoModel()
+_x = torch.randint(0, VOCAB_SIZE, (2, MAX_LEN))
+
+_rl, _dl, _sc = _m(_x)
+
+print("Model architecture defined.")
+print(f"  Stacked layers   : {NUM_ATTN_LAYERS}")
+print(f"  Repair shape     : {_rl.shape}")
+print(f"  Diag shape       : {_dl.shape}")
+print(f"  Gate scores/layer: {_sc[0].shape}")
+print(f"  Total params     : {sum(p.numel() for p in _m.parameters()):,}")
+
+del _m, _x, _rl, _dl, _sc
+
+# ─────────────────────────────────────────────────────────────
+# Loss Functions & Training Utilities
+# ─────────────────────────────────────────────────────────────
+
+
+# ==============================================================
+# Joint Curriculum Loss
+# ==============================================================
+
+class JointCurriculumLoss(nn.Module):
+    """
+    Multi-task loss combining repair and diagnosis objectives.
+
+    Components:
+        1. Repair Loss:
+           Token-level cross-entropy predicting corrected bases.
+
+        2. Diagnosis Loss:
+           Sequence-level classification of damage type.
+
+    Label smoothing is applied to improve generalisation and
+    reduce overconfidence during early curriculum stages.
+    """
+
+    def __init__(self, label_smoothing=0.1):
+        super().__init__()
+
+        self.repair_fn = nn.CrossEntropyLoss(
+            label_smoothing=label_smoothing
+        )
+        self.diag_fn = nn.CrossEntropyLoss(
+            label_smoothing=label_smoothing
+        )
+
+    def forward(self,
+                repair_logits,
+                diag_logits,
+                clean,
+                damage_labels,
+                diag_weight=0.3):
+        """
+        Returns:
+            total_loss, repair_loss, diagnosis_loss
+        """
+
+        # Token-level repair objective
+        r = self.repair_fn(
+            repair_logits.view(-1, repair_logits.size(-1)),
+            clean.view(-1)
+        )
+
+        # Sequence-level diagnosis objective
+        d = self.diag_fn(diag_logits, damage_labels)
+
+        # Weighted multi-task combination
+        return r + diag_weight * d, r, d
+
+
+# ==============================================================
+# Curriculum Stage Utilities
+# ==============================================================
+
+def get_stage_info(epoch):
+    """
+    Determines active curriculum stage based on epoch number.
+
+    Returns:
+        stage_index,
+        target_sparsity,
+        epoch_within_stage
+    """
+    for i, (start, end, sp) in enumerate(CURRICULUM_STAGES, 1):
+        if start <= epoch <= end:
+            return i, sp, epoch - start + 1
+
+    # Default to final stage
+    return 6, 0.95, (
+        CURRICULUM_STAGES[-1][1] -
+        CURRICULUM_STAGES[-1][0] + 1
+    )
+
+
+def get_stage_sparsity(stage_idx: int,
+                       epoch_within_stage: int,
+                       total_stage_epochs: int) -> float:
+    """
+    Smooth linear transition between curriculum stages.
+
+    Instead of abrupt sparsity jumps, sparsity increases
+    gradually across each stage to stabilise optimisation.
+    """
+
+    target = CURRICULUM_STAGES[stage_idx][2]
+    prev   = CURRICULUM_STAGES[stage_idx - 1][2] if stage_idx > 0 else 0.0
+
+    frac = min(
+        epoch_within_stage /
+        max(total_stage_epochs - 1, 1),
+        1.0
+    )
+
+    return prev + (target - prev) * frac
+
+
+# ==============================================================
+# Confidence Gate Regularisation
+# ==============================================================
+
+def gate_entropy_loss(conf_scores_all: list,
+                      target_sparsity: float) -> torch.Tensor:
+    """
+    Regularisation applied to all confidence gates.
+
+    Term 1 — Entropy Penalty:
+        Encourages decisive gating behaviour (values near 0 or 1)
+        rather than uncertain mid-range activations.
+
+    Term 2 — Sparsity Alignment:
+        Penalises deviation between actual suppression rate
+        and curriculum target sparsity.
+
+    Loss is averaged across stacked layers to maintain scale
+    independence from model depth.
+    """
+
+    eps = 1e-6
+    total_loss = torch.tensor(
+        0.0,
+        device=conf_scores_all[0].device
+    )
+
+    for scores in conf_scores_all:
+
+        s = scores.squeeze(-1)
+
+        # Binary entropy penalty
+        entropy = -(
+            s * (s + eps).log() +
+            (1 - s) * (1 - s + eps).log()
+        )
+        entropy_loss = entropy.mean()
+
+        # Sparsity alignment penalty
+        actual_sparsity = (s < 0.5).float().mean()
+        sparsity_loss = (actual_sparsity - target_sparsity).pow(2)
+
+        total_loss += (
+            0.01 * entropy_loss +
+            0.05 * sparsity_loss
+        )
+
+    return total_loss / len(conf_scores_all)
+
+
+# ==============================================================
+# Optimiser & Scheduler
+# ==============================================================
+
+def make_optimizer_and_scheduler(model: nn.Module,
+                                 stage_num: int,
+                                 stage_epochs: int):
+    """
+    Creates a fresh optimiser for each curriculum stage.
+
+    Strategy:
+        • AdamW optimiser for stable transformer training
+        • Cosine annealing schedule within each stage
+        • Learning rate decays to 5% of peak value
+    """
+
+    lr = STAGE_LR[stage_num]
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=1e-4
+    )
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=stage_epochs,
+        eta_min=lr * 0.05
+    )
+
+    return optimizer, scheduler
+
+
+# ==============================================================
+# Auxiliary Curriculum Helpers
+# ==============================================================
+
+# Retained for ablation experiments
+def get_effective_sparsity(stage_epoch, target, warmup=2):
+    """
+    Optional warmup sparsity used for ablation comparisons.
+    """
+    if target == 0.0 or stage_epoch > warmup:
+        return target
+    return target * (stage_epoch / warmup)
+
+
+def get_diag_weight(sparsity):
+    """
+    Dynamically increases diagnosis loss importance
+    as sequence degradation becomes more severe.
+    """
+    return round(0.1 + 0.4 * sparsity, 3)
+
+
+# ==============================================================
+# Checkpoint Utilities
+# ==============================================================
+
+def save_checkpoint(path, model, optimizer, scheduler,
+                    epoch, history, val_r, val_d, sparsity):
+    """
+    Saves full training state for reproducibility.
+    """
+
+    torch.save({
+        'epoch':                epoch,
+        'model_state_dict':     model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'history':              history,
+        'val_repair_acc':       val_r,
+        'val_diag_acc':         val_d,
+        'sparsity':             sparsity,
+    }, path)
+
+
+def load_weights_only(path, model):
+    """
+    Loads model weights without restoring optimiser state.
+    Useful for evaluation or transfer experiments.
+    """
+
+    ckpt = torch.load(path, map_location=device)
+
+    sd = ckpt.get('model_state_dict', ckpt)
+    model.load_state_dict(sd, strict=False)
+
+    epoch   = ckpt.get('epoch', 0)
+    history = ckpt.get('history', {})
+
+    return epoch, history
+
+
+# ==============================================================
+# Evaluation Routine
+# ==============================================================
+
+@torch.no_grad()
+def evaluate(model,
+             loader,
+             criterion,
+             device,
+             steps=50,
+             diag_weight=0.3):
+    """
+    Performs limited validation evaluation.
+
+    Computes:
+        • average loss
+        • repair accuracy (token level)
+        • diagnosis accuracy (sequence level)
+    """
+
+    model.eval()
+
+    total_loss = 0
+    r_correct = r_total = 0
+    d_correct = d_total = 0
+
+    for i, (d, c, labels) in enumerate(loader):
+
+        if i >= steps:
+            break
+
+        d, c, labels = (
+            d.to(device),
+            c.to(device),
+            labels.to(device)
+        )
+
+        rl, dl, _ = model(d)
+
+        loss, _, _ = criterion(
+            rl, dl, c, labels, diag_weight
+        )
+
+        total_loss += loss.item()
+
+        r_correct += (torch.argmax(rl, -1) == c).sum().item()
+        r_total   += c.numel()
+
+        d_correct += (torch.argmax(dl, 1) == labels).sum().item()
+        d_total   += labels.size(0)
+
+    return (
+        total_loss / steps,
+        r_correct / r_total,
+        d_correct / d_total
+    )
+
+
+print("Helpers defined.")
+
+# ─────────────────────────────────────────────────────────────
+#  Curriculum Training Procedure
+# ─────────────────────────────────────────────────────────────
+
+def train_stage(stage_num, resume_checkpoint=None):
+    """
+    Executes one curriculum learning stage.
+
+    Each stage trains the model under progressively higher
+    sequence sparsity (damage severity).
+
+    Key training design principles:
+        • Progressive sparsity curriculum
+        • Per-stage optimiser reset
+        • Sparsity replay to prevent forgetting
+        • Cross-stage knowledge transfer
+        • Continuous validation monitoring
+    """
+
+    global CURRENT_SPARSITY_PROB
+
+    # ----------------------------------------------------------
+    # Stage Configuration
+    # ----------------------------------------------------------
+
+    start_ep, end_ep, target_sp = CURRICULUM_STAGES[stage_num - 1]
+    num_epochs = end_ep - start_ep + 1
+    MAX_STEPS  = STEPS_PER_STAGE[stage_num]
+
+    # Fresh model instance per stage
+    model = DualModeMitoModel(
+        vocab_size=VOCAB_SIZE,
+        embed_dim=EMBED_DIM,
+        num_heads=NUM_HEADS,
+        num_attn_layers=NUM_ATTN_LAYERS,
+        num_damage_classes=NUM_DAMAGE_CLASSES,
+    ).to(device)
+
+    optimizer, scheduler = make_optimizer_and_scheduler(
+        model, stage_num, num_epochs
+    )
+
+    criterion = JointCurriculumLoss(label_smoothing=0.1)
+
+    # ----------------------------------------------------------
+    # Training History Tracking
+    # ----------------------------------------------------------
+
+    history = {k: [] for k in [
+        'epoch', 'stage', 'stage_epoch',
+        'loss', 'val_loss',
+        'repair_acc', 'val_repair_acc',
+        'diag_acc', 'val_diag_acc',
+        'sparsity', 'effective_sparsity',
+        'diag_weight', 'lr',
+    ]}
+
+    resume_epoch = start_ep
+
+    # ----------------------------------------------------------
+    # Checkpoint Resume Logic
+    # ----------------------------------------------------------
+
+    if resume_checkpoint and os.path.exists(resume_checkpoint):
+
+        print(f"Loading checkpoint: {resume_checkpoint}")
+        ckpt = torch.load(resume_checkpoint, map_location=device)
+
+        # Always restore learned weights
+        sd = ckpt.get('model_state_dict', ckpt)
+        model.load_state_dict(sd, strict=False)
+
+        prev_stage = ckpt.get('history', {}).get('stage', [None])[-1]
+
+        if prev_stage == stage_num:
+            # Mid-stage resume → restore full training state
+            print(f"Mid-stage resume from epoch {ckpt['epoch'] + 1}")
+
+            optimizer.load_state_dict(
+                ckpt['optimizer_state_dict']
+            )
+            scheduler.load_state_dict(
+                ckpt['scheduler_state_dict']
+            )
+
+            history      = ckpt['history']
+            resume_epoch = ckpt['epoch'] + 1
+
+        else:
+            # Cross-stage transfer → weights only
+            print(f"Cross-stage transfer: {prev_stage} → {stage_num}")
+
+            peak_lr = STAGE_LR[stage_num]
+            warm_lr = peak_lr * 0.3
+
+            for g in optimizer.param_groups:
+                g['lr'] = warm_lr
+
+            print(
+                f"Warm LR start: {warm_lr:.2e} → "
+                f"{peak_lr:.2e} over first epoch"
+            )
+    else:
+        print(f"Stage {stage_num} — starting fresh")
+
+    # ----------------------------------------------------------
+    # Curriculum Sparsity Setup
+    # ----------------------------------------------------------
+
+    diag_w = STAGE_DW[stage_num]
+    CURRENT_SPARSITY_PROB = target_sp
+
+    print(f"\n{'='*60}")
+    print(
+        f"STAGE {stage_num} | Target sparsity {int(target_sp*100)}% | "
+        f"Epochs {start_ep}-{end_ep} | {MAX_STEPS} steps/epoch | "
+        f"dw={diag_w} | peak_lr={STAGE_LR[stage_num]:.0e}"
+    )
+    print(f"{'='*60}\n")
+
+    # ==========================================================
+    # Training Loop
+    # ==========================================================
+
+    for epoch in range(resume_epoch, end_ep + 1):
+
+        _, _, stage_epoch = get_stage_info(epoch)
+
+        # Smooth sparsity transition inside stage
+        effective_sp = get_stage_sparsity(
+            stage_idx          = stage_num - 1,
+            epoch_within_stage = stage_epoch - 1,
+            total_stage_epochs = num_epochs
+        )
+
+        prev_sp = (
+            CURRICULUM_STAGES[stage_num - 2][2]
+            if stage_num > 1 else 0.0
+        )
+
+        # ------------------------------------------------------
+        # Sparsity Replay Sampling
+        # ------------------------------------------------------
+        # Randomises sparsity per batch so the model retains
+        # competence at lower degradation levels.
+
+        def get_batch_sparsity():
+
+            if effective_sp <= 0:
+                return 0.0
+
+            # 20% replay from earlier easier regimes
+            if random.random() < 0.20:
+                return random.uniform(0.0, prev_sp)
+
+            low = max(0.0, prev_sp - 0.10)
+            return random.uniform(low, effective_sp)
+
+        CURRENT_SPARSITY_PROB = effective_sp
+
+        model.train()
+
+        epoch_loss = 0
+        r_correct = r_total = 0
+        d_correct = d_total = 0
+
+        pbar = tqdm(
+            enumerate(train_loader),
+            total=MAX_STEPS,
+            desc=f"St{stage_num} Ep{stage_epoch}/{num_epochs}"
+        )
+
+        # ------------------------------------------------------
+        # Batch Training
+        # ------------------------------------------------------
+
+        for i, (d, c, labels) in pbar:
+
+            if i >= MAX_STEPS:
+                break
+
+            batch_sp = get_batch_sparsity()
+
+            # Apply degradation dynamically
+            mask = torch.rand_like(d.float()) < batch_sp
+            d = d.clone()
+            d[mask] = 4      # unknown base token
+
+            d, c, labels = (
+                d.to(device),
+                c.to(device),
+                labels.to(device)
+            )
+
+            optimizer.zero_grad()
+
+            rl, dl, conf_scores_all = model(d)
+
+            # Main joint loss
+            loss, r_loss, d_loss = criterion(
+                rl, dl, c, labels, diag_w
+            )
+
+            # Confidence gate regularisation
+            g_loss = gate_entropy_loss(
+                conf_scores_all, batch_sp
+            )
+
+            loss = loss + g_loss
+
+            if torch.isnan(loss):
+                print(f"NaN detected at step {i}")
+                break
+
+            loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), 1.0
+            )
+
+            optimizer.step()
+
+            epoch_loss += loss.item()
+
+            with torch.no_grad():
+                r_correct += (
+                    torch.argmax(rl, -1) == c
+                ).sum().item()
+                r_total += c.numel()
+
+                d_correct += (
+                    torch.argmax(dl, 1) == labels
+                ).sum().item()
+                d_total += labels.size(0)
+
+            pbar.set_postfix({
+                'sp': f"{int(batch_sp*100)}%",
+                'r':  f"{r_loss.item():.3f}",
+                'd':  f"{d_loss.item():.3f}",
+                'g':  f"{g_loss.item():.4f}",
+            })
+
+        # ------------------------------------------------------
+        # Learning Rate Update
+        # ------------------------------------------------------
+
+        scheduler.step()
+        lr = scheduler.get_last_lr()[0]
+
+        # ------------------------------------------------------
+        # Validation Evaluation
+        # ------------------------------------------------------
+
+        # Performance at target sparsity
+        val_loss, val_r, val_d = evaluate(
+            model, val_loader, criterion,
+            device, steps=50, diag_weight=diag_w
+        )
+
+        # Clean-data evaluation (forgetting monitor)
+        saved_sp = CURRENT_SPARSITY_PROB
+        CURRENT_SPARSITY_PROB = 0.0
+
+        _, val_r_clean, _ = evaluate(
+            model, val_loader, criterion,
+            device, steps=30, diag_weight=diag_w
+        )
+
+        CURRENT_SPARSITY_PROB = saved_sp
+
+        avg_loss = epoch_loss / MAX_STEPS
+        avg_r = r_correct / r_total
+        avg_d = d_correct / d_total
+
+        # ------------------------------------------------------
+        # History Logging
+        # ------------------------------------------------------
+
+        history['epoch'].append(epoch)
+        history['stage'].append(stage_num)
+        history['stage_epoch'].append(stage_epoch)
+        history['loss'].append(avg_loss)
+        history['val_loss'].append(val_loss)
+        history['repair_acc'].append(avg_r)
+        history['val_repair_acc'].append(val_r)
+        history['diag_acc'].append(avg_d)
+        history['val_diag_acc'].append(val_d)
+        history['sparsity'].append(target_sp)
+        history['effective_sparsity'].append(effective_sp)
+        history['diag_weight'].append(diag_w)
+        history['lr'].append(lr)
+
+        print(
+            f"Stage {stage_num} | Ep {stage_epoch}/{num_epochs} | "
+            f"Sp 0-{int(effective_sp*100)}% | "
+            f"Repair {avg_r*100:.2f}% → Val@target {val_r*100:.2f}% "
+            f"Val@0% {val_r_clean*100:.2f}% | "
+            f"Diag {avg_d*100:.2f}% → {val_d*100:.2f}% | "
+            f"Loss {avg_loss:.4f} | LR {lr:.6f}"
+        )
+
+        # ------------------------------------------------------
+        # Checkpoint Saving
+        # ------------------------------------------------------
+
+        ckpt_name = (
+            f"{MODEL_SAVE_DIR}v2_stage{stage_num}"
+            f"_ep{stage_epoch}of{num_epochs}"
+            f"_sp{int(effective_sp*100)}"
+            f"_rep{val_r*100:.1f}"
+            f"_diag{val_d*100:.1f}.pt"
+        )
+
+        save_checkpoint(
+            ckpt_name,
+            model,
+            optimizer,
+            scheduler,
+            epoch,
+            history,
+            val_r,
+            val_d,
+            target_sp
+        )
+
+        print(f"Saved: {ckpt_name}\n")
+
+    print(f"Stage {stage_num} complete.")
+    return model, history, ckpt_name
+
+
+print("Training function defined.")
+
+# ─────────────────────────────────────────────────────────────
+# Stage 1: Dense (0% sparsity, 10 epochs)
+# ─────────────────────────────────────────────────────────────
+
+model, history_s1, last_ckpt_s1 = train_stage(
+    stage_num=1,
+    resume_checkpoint="/content/drive/MyDrive/MitoSeqFix/cl_models_v2/v2_stage1_ep2of10_sp0_rep82.8_diag100.0.pt",
+)
+print(f"\nStage 1 done. Checkpoint: {last_ckpt_s1}")
+
+# ─────────────────────────────────────────────────────────────
+#  Stage 2: 20% sparsity (6 epochs)
+# ─────────────────────────────────────────────────────────────
+
+model, history_s2, last_ckpt_s2 = train_stage(
+    stage_num=2,
+    resume_checkpoint="/content/drive/MyDrive/MitoSeqFix/cl_models_v2/v2_stage1_ep10of10_sp0_rep84.6_diag100.0.pt",
+)
+print(f"\nStage 2 done. Checkpoint: {last_ckpt_s2}")
+
+# ─────────────────────────────────────────────────────────────
+# Stage 3: 40% sparsity (7 epochs)
+# ─────────────────────────────────────────────────────────────
+
+model, history_s3, last_ckpt_s3 = train_stage(
+    stage_num=3,
+    resume_checkpoint="/content/drive/MyDrive/MitoSeqFix/cl_models_v2/v2_stage2_ep6of6_sp20_rep77.6_diag97.4.pt"
+    )
+print(f"\nStage 3 done. Checkpoint: {last_ckpt_s3}")
+
+# ─────────────────────────────────────────────────────────────
+# Stage 4: 60% sparsity (10 epochs)
+# ─────────────────────────────────────────────────────────────
+
+model, history_s4, last_ckpt_s4 = train_stage(
+    stage_num=4,
+    resume_checkpoint="/content/drive/MyDrive/MitoSeqFix/cl_models_v2/v2_stage3_ep7of7_sp40_rep66.3_diag85.1.pt",
+)
+print(f"\nStage 4 done. Checkpoint: {last_ckpt_s4}")
+
+# ─────────────────────────────────────────────────────────────
+# Ablation Experiment: Training Without Curriculum Learning
+# ─────────────────────────────────────────────────────────────
+
+# Directory used to store intermediate and final ablation models
+SAVE_DIR = '/content/drive/My Drive/MitoSeqFix_Ablations'
+os.makedirs(SAVE_DIR, exist_ok=True)
+print(f"Models will be saved to: {SAVE_DIR}")
+
+
+def train_no_curriculum(mode="fixed", fixed_sparsity=0.60,
+                        total_steps=2500, tag="ablation"):
+    """
+    Train the DualModeMitoModel without curriculum learning.
+
+    Parameters
+    ----------
+    mode : str
+        Training strategy controlling sparsity behaviour:
+            "fixed"  → constant sparsity applied from the first step.
+            "random" → sparsity sampled uniformly each batch.
+
+    fixed_sparsity : float
+        Sparsity level used when mode="fixed".
+
+    total_steps : int
+        Total number of optimization iterations.
+
+    tag : str
+        Identifier used when saving checkpoints.
+
+    Returns
+    -------
+    results : list
+        Validation performance recorded at evaluation checkpoints.
+    model : torch.nn.Module
+        Trained model instance.
+    """
+
+    global CURRENT_SPARSITY_PROB
+
+    # ── Model Initialization ─────────────────────────────────
+    # Dual-task transformer predicting:
+    #   (1) sequence repair
+    #   (2) damage diagnosis
+    model = DualModeMitoModel(
+        vocab_size=VOCAB_SIZE,
+        embed_dim=EMBED_DIM,
+        num_heads=NUM_HEADS,
+        num_attn_layers=NUM_ATTN_LAYERS,
+        num_damage_classes=NUM_DAMAGE_CLASSES,
+    ).to(device)
+
+    # Optimizer with weight decay for regularization
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=5e-4,
+        weight_decay=1e-4
+    )
+
+    # Cosine annealing learning-rate schedule
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=total_steps,
+        eta_min=5e-4 * 0.05
+    )
+
+    # Joint loss combining repair and diagnosis objectives
+    criterion = JointCurriculumLoss(label_smoothing=0.1)
+
+    results = []
+    step = 0
+    model.train()
+
+    # Progress bar for monitoring training progress
+    pbar = tqdm(total=total_steps, desc=f"No-curriculum [{mode}]")
+
+    # ─────────────────────────────────────────────────────────
+    # Training Loop
+    # ─────────────────────────────────────────────────────────
+    for d, c, labels in train_loader:
+
+        if step >= total_steps:
+            break
+
+        # ── Sparsity Control (Ablation Variable) ──────────────
+        # Defines damage severity applied to input sequences
+        if mode == "fixed":
+            CURRENT_SPARSITY_PROB = fixed_sparsity
+        elif mode == "random":
+            CURRENT_SPARSITY_PROB = random.uniform(0, 0.95)
+
+        # Move batch to GPU / device
+        d, c, labels = d.to(device), c.to(device), labels.to(device)
+
+        optimizer.zero_grad()
+
+        # Forward pass
+        rl, dl, conf_scores_all = model(d)
+
+        # Joint repair + diagnosis loss
+        loss, r_loss, d_loss = criterion(
+            rl, dl, c, labels,
+            diag_weight=0.3
+        )
+
+        # Gate entropy regularization
+        # Encourages adaptive routing behaviour
+        g_loss = gate_entropy_loss(conf_scores_all,
+                                   CURRENT_SPARSITY_PROB)
+        loss = loss + g_loss
+
+        # Safety check against unstable training
+        if torch.isnan(loss):
+            print(f"NaN at step {step} — recording and stopping")
+            break
+
+        # Backpropagation
+        loss.backward()
+
+        # Gradient clipping for stability
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+        optimizer.step()
+        scheduler.step()
+
+        # ─────────────────────────────────────────────────────
+        # Periodic Evaluation + Checkpoint Saving
+        # ─────────────────────────────────────────────────────
+        checkpoints = {2500, 5000, 8000, 11000, 14000, 15000}
+
+        if step in checkpoints:
+
+            # Evaluate robustness across multiple sparsity levels
+            for eval_sp in [0.0, 0.20, 0.40, 0.60, 0.80, 0.95]:
+
+                CURRENT_SPARSITY_PROB = eval_sp
+
+                _, val_r, val_d = evaluate(
+                    model,
+                    val_loader,
+                    criterion,
+                    device,
+                    steps=50,
+                    diag_weight=0.3
+                )
+
+                results.append({
+                    'step': step,
+                    'eval_sparsity': eval_sp,
+                    'val_repair_acc': val_r,
+                    'val_diag_acc': val_d,
+                    'mode': mode,
+                })
+
+                print(
+                    f"[{mode}] step={step} | "
+                    f"eval_sp={int(eval_sp*100)}% | "
+                    f"repair={val_r*100:.2f}% | "
+                    f"diag={val_d*100:.2f}%"
+                )
+
+            # Save intermediate checkpoint to Google Drive
+            checkpoint_path = (
+                f"{SAVE_DIR}/{tag}_{mode}_step{step}.pt"
+            )
+
+            torch.save({
+                'step': step,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'results': results
+            }, checkpoint_path)
+
+            print(f"Backup saved to Drive: {checkpoint_path}")
+
+            # Resume training mode after evaluation
+            model.train()
+
+        pbar.update(1)
+        step += 1
+
+    pbar.close()
+
+    # ─────────────────────────────────────────────────────────
+    # Final Model Saving
+    # ─────────────────────────────────────────────────────────
+    final_path = f"{SAVE_DIR}/{tag}_{mode}_FINAL.pt"
+
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'results': results,
+        'mode': mode
+    }, final_path)
+
+    print(f"Final model safely saved to Drive: {final_path}")
+
+    return results, model
+
+
+results_fixed,  model_fixed  = train_no_curriculum(mode="fixed",  fixed_sparsity=0.60)
+# Save the Fixed Sparsity ablation model
+torch.save(model_fixed.state_dict(), 'mito_model_fixed_ablation.pth')
+
+
+import torch
+
+results_random, model_random = train_no_curriculum(mode="random")
+
+# Save the Random Sparsity ablation model
+torch.save(model_random.state_dict(), 'mito_model_random_ablation.pth')
+
+print("Abalation random saved successfully to disk.")
+
+# ─────────────────────────────────────────────────────────────
+# Model paths & loader
+# ─────────────────────────────────────────────────────────────
+
+CURRICULUM_PATH = "/content/drive/MyDrive/MitoSeqFix/cl_models_v2/v2_stage4_consolidation_ep3.pt"
+FIXED_PATH      = "/content/drive/My Drive/MitoSeqFix_Ablations/ablation_fixed_FINAL.pt"
+RANDOM_PATH     = "/content/drive/My Drive/MitoSeqFix_Ablations/ablation_random_FINAL.pt"
+
+
+def load_model(path):
+    model = DualModeMitoModel(
+        vocab_size=VOCAB_SIZE,
+        embed_dim=EMBED_DIM,
+        num_heads=NUM_HEADS,
+        num_attn_layers=NUM_ATTN_LAYERS,
+        num_damage_classes=NUM_DAMAGE_CLASSES,
+    ).to(device)
+
+    ckpt = torch.load(path, map_location=device)
+
+    # Curriculum saves via save_checkpoint (has 'model_state_dict')
+    # Ablation saves directly with 'model_state_dict' too
+    state = ckpt['model_state_dict'] if 'model_state_dict' in ckpt else ckpt
+    model.load_state_dict(state)
+    model.eval()
+    return model
+
+
+curriculum_model = load_model(CURRICULUM_PATH)
+fixed_model      = load_model(FIXED_PATH)
+random_model     = load_model(RANDOM_PATH)
+
+print("All three models loaded.")
+
+# ─────────────────────────────────────────────────────────────
+# Model Evaluation Across Damage Sparsity Levels
+# ─────────────────────────────────────────────────────────────
+
+# Sparsity levels used to evaluate robustness against degradation
+EVAL_SPARSITIES = [0.0, 0.20, 0.40, 0.60]
+
+
+def evaluate_across_sparsity(model, sparsity_levels,
+                             val_loader, device, steps=100):
+    """
+    Evaluate a trained model across multiple degradation levels.
+
+    The function measures how model performance changes as the
+    proportion of missing/damaged bases increases.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Trained model to evaluate.
+
+    sparsity_levels : list
+        List of masking probabilities representing damage severity.
+
+    val_loader : DataLoader
+        Validation dataset loader.
+
+    device : torch.device
+        CPU or GPU execution device.
+
+    steps : int
+        Number of validation batches sampled per evaluation.
+
+    Returns
+    -------
+    results : list of dict
+        Repair and diagnosis accuracy for each sparsity level.
+    """
+
+    results = []
+    global CURRENT_SPARSITY_PROB
+
+    # Loss configuration identical to training evaluation
+    criterion = JointCurriculumLoss(label_smoothing=0.1)
+
+    model.eval()
+
+    # ── Evaluate robustness across degradation levels ────────
+    for sp in sparsity_levels:
+
+        # Apply evaluation sparsity globally
+        CURRENT_SPARSITY_PROB = sp
+
+        _, val_r, val_d = evaluate(
+            model,
+            val_loader,
+            criterion,
+            device,
+            steps=steps,
+            diag_weight=0.3
+        )
+
+        results.append({
+            'sparsity': sp,
+            'val_repair_acc': val_r,
+            'val_diag_acc': val_d,
+        })
+
+        print(
+            f"  sp={int(sp*100):>3}% | "
+            f"repair={val_r*100:.2f}% | "
+            f"diag={val_d*100:.2f}%"
+        )
+
+    # Reset sparsity after evaluation
+    CURRENT_SPARSITY_PROB = 0.0
+
+    return results
+
+
+# ─────────────────────────────────────────────────────────────
+# Evaluate All Experimental Models
+# ─────────────────────────────────────────────────────────────
+
+print("Evaluating curriculum model...")
+cur_eval = evaluate_across_sparsity(
+    curriculum_model, EVAL_SPARSITIES, val_loader, device
+)
+
+print("\nEvaluating fixed ablation...")
+fix_eval = evaluate_across_sparsity(
+    fixed_model, EVAL_SPARSITIES, val_loader, device
+)
+
+print("\nEvaluating random ablation...")
+rnd_eval = evaluate_across_sparsity(
+    random_model, EVAL_SPARSITIES, val_loader, device
+)
+
+
+# ─────────────────────────────────────────────────────────────
+# Visualization of Experimental Results
+# ─────────────────────────────────────────────────────────────
+
+def plot_results(cur_eval, fix_eval, rnd_eval):
+    """
+    Generate comparative visualizations for curriculum learning
+    and ablation experiments.
+
+    Two plots are produced:
+    1. Accuracy vs sparsity curve (robustness analysis)
+    2. Target sparsity comparison bar chart (headline result)
+    """
+
+    # Convert sparsity to percentage scale
+    sp = [r['sparsity'] * 100 for r in cur_eval]
+
+    # Extract repair and diagnosis metrics
+    cur_rep  = [r['val_repair_acc'] * 100 for r in cur_eval]
+    cur_diag = [r['val_diag_acc']   * 100 for r in cur_eval]
+    fix_rep  = [r['val_repair_acc'] * 100 for r in fix_eval]
+    rnd_rep  = [r['val_repair_acc'] * 100 for r in rnd_eval]
+
+    # Create side-by-side comparison figure
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig.suptitle("MitoSeqFix — Curriculum vs Ablations", fontsize=14)
+
+    # ── Panel 1: Robustness Curve ───────────────────────────
+    # Shows how accuracy degrades as sequence damage increases
+    ax = axes[0]
+
+    ax.plot(sp, cur_rep,  'b-o', markersize=6,
+            label='Curriculum — repair')
+
+    ax.plot(sp, cur_diag, 'b--o', markersize=6, alpha=0.5,
+            label='Curriculum — diag')
+
+    ax.plot(sp, fix_rep,  'r-s', markersize=6,
+            label='Fixed sparsity')
+
+    ax.plot(sp, rnd_rep,  'g-^', markersize=6,
+            label='Random sparsity')
+
+    ax.set_xlabel("Eval sparsity (%)")
+    ax.set_ylabel("Accuracy (%)")
+    ax.set_title("Accuracy vs sparsity (post-training)")
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    # ── Panel 2: Target Benchmark Comparison ────────────────
+    # Presents headline comparison at 60% sparsity
+    ax = axes[1]
+
+    target_idx = EVAL_SPARSITIES.index(0.60)
+
+    models = ['Curriculum', 'Fixed', 'Random']
+
+    repairs = [
+        cur_rep[target_idx],
+        fix_rep[target_idx],
+        rnd_rep[target_idx]
+    ]
+
+    diags = [
+        cur_diag[target_idx],
+        [r['val_diag_acc'] * 100 for r in fix_eval][target_idx],
+        [r['val_diag_acc'] * 100 for r in rnd_eval][target_idx]
+    ]
+
+    x = np.arange(len(models))
+    w = 0.35
+
+    # Repair accuracy bars (solid)
+    ax.bar(x - w/2, repairs, w,
+           label='Repair acc',
+           color=['steelblue', 'tomato', 'seagreen'])
+
+    # Diagnosis accuracy bars (semi-transparent)
+    ax.bar(x + w/2, diags, w,
+           label='Diag acc',
+           color=['steelblue', 'tomato', 'seagreen'],
+           alpha=0.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(models)
+    ax.set_ylabel("Accuracy (%)")
+    ax.set_title(
+        "Accuracy at 60% sparsity (target)\n"
+        "solid = repair, faded = diagnosis"
+    )
+
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # Annotate numerical values above bars
+    for i, (r, d) in enumerate(zip(repairs, diags)):
+        ax.text(i - w/2, r + 0.3, f"{r:.1f}%", ha='center', fontsize=8)
+        ax.text(i + w/2, d + 0.3, f"{d:.1f}%", ha='center', fontsize=8)
+
+    plt.tight_layout()
+
+    # Save figure for dissertation inclusion
+    path = MODEL_SAVE_DIR + "results_plot.png"
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+
+    plt.show()
+    print(f"Saved: {path}")
+
+
+# Generate final comparison figure
+plot_results(cur_eval, fix_eval, rnd_eval)
+
+# ─────────────────────────────────────────────────────────────
+# Results Table
+# ─────────────────────────────────────────────────────────────
+
+def print_results_table(cur_eval, fix_eval, rnd_eval):
+    print("\n" + "="*65)
+    print(f"  {'Model':<18}{'Sparsity':<12}{'Val Repair':<14}{'Val Diag'}")
+    print("="*65)
+
+    for label, results in [("Curriculum",     cur_eval),
+                            ("Fixed sparsity", fix_eval),
+                            ("Random sparsity",rnd_eval)]:
+        print(f"\n  {label}")
+        print("─"*65)
+        for r in results:
+            print(
+                f"  {'':18}{int(r['sparsity']*100):>3}%{'':8}"
+                f"  {r['val_repair_acc']*100:>6.2f}%{'':5}"
+                f"  {r['val_diag_acc']*100:>6.2f}%"
+            )
+
+    # Summary: best repair acc per model
+    print("\n" + "="*65)
+    print("  BEST REPAIR ACCURACY PER MODEL")
+    print("─"*65)
+    for label, results in [("Curriculum",      cur_eval),
+                            ("Fixed sparsity",  fix_eval),
+                            ("Random sparsity", rnd_eval)]:
+        best = max(results, key=lambda r: r['val_repair_acc'])
+        print(f"  {label:<20} {best['val_repair_acc']*100:.2f}% "
+              f"@ {int(best['sparsity']*100)}% sparsity")
+    print("="*65)
+
+
+print_results_table(cur_eval, fix_eval, rnd_eval)
+
+# ============================================================
+# MitoSeqFix — TESTING
+# ============================================================
+
+# This module evaluates trained models across:
+#   • Sparsity robustness (0% → 60%)
+#   • Ablation baselines
+#   • Confusion analysis (repair + diagnosis)
+#   • ROC-AUC performance
+#   • Cross-checkpoint comparison
+
+
+# ────────────────────────────────────────────────────────────
+# Setup: Evaluation checkpoints
+# ────────────────────────────────────────────────────────────
+
+from sklearn.metrics import (
+    confusion_matrix, classification_report,
+    roc_auc_score, f1_score, precision_score, recall_score,
+    roc_curve
+)
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
+# Sparsity levels used for robustness testing
+EVAL_SPARSITIES = [0.0, 0.20, 0.40, 0.60]
+
+
+# ============================================================
+# A — Load trained model checkpoint
+# ============================================================
+
+# Multiple experimental checkpoints (curriculum vs ablations)
+CURRICULUM_PATH = "/content/drive/MyDrive/MitoSeqFix/cl_models_v2/v2_stage4_consolidation_ep3.pt"
+FIXED_PATH      = "/content/drive/My Drive/MitoSeqFix_Ablations/ablation_fixed_FINAL.pt"
+RANDOM_PATH     = "/content/drive/My Drive/MitoSeqFix_Ablations/ablation_random_FINAL.pt"
+
+CKPT_PATH = CURRICULUM_PATH  # switch for evaluation
+
+# Instantiate identical architecture for fair comparison
+eval_model = DualModeMitoModel(
+    vocab_size=VOCAB_SIZE,
+    embed_dim=EMBED_DIM,
+    num_heads=NUM_HEADS,
+    num_attn_layers=NUM_ATTN_LAYERS,
+    num_damage_classes=NUM_DAMAGE_CLASSES,
+).to(device)
+
+# Load model parameters
+ckpt = torch.load(CKPT_PATH, map_location=device)
+eval_model.load_state_dict(ckpt['model_state_dict'], strict=False)
+eval_model.eval()
+
+print(f"Loaded checkpoint: {CKPT_PATH}")
+print(f"  Epoch           : {ckpt.get('epoch', '?')}")
+print(f"  Val Repair Acc  : {ckpt.get('val_repair_acc', 0)*100:.2f}%")
+print(f"  Val Diagnosis   : {ckpt.get('val_diag_acc', 0)*100:.2f}%")
+print(f"  Training Sparsity: {ckpt.get('sparsity', 0)*100:.0f}%")
+
+
+# ============================================================
+# B — Full dataset prediction & metric extraction
+# ============================================================
+
+# Vocabulary definitions
+NUCLEOTIDE_VOCAB = ['A', 'C', 'G', 'T']
+DAMAGE_CLASSES   = sorted(train_ds.label_map,
+                          key=train_ds.label_map.get)
+
+PAD_TOKEN_ID = 4  # represents unknown nucleotide
+
+repair_preds, repair_targets = [], []
+diag_preds, diag_targets     = [], []
+diag_probs_all               = []
+
+# Inference phase (no gradient computation)
+with torch.no_grad():
+    for damaged, clean, labels in val_loader:
+
+        damaged = damaged.to(device)
+        clean   = clean.to(device)
+        labels  = labels.to(device)
+
+        repair_logits, diag_logits, _ = eval_model(damaged)
+
+        # -------------------------
+        # Repair task evaluation
+        # -------------------------
+        mask = clean != PAD_TOKEN_ID
+
+        repair_preds.extend(
+            repair_logits.argmax(-1)[mask].cpu().numpy()
+        )
+        repair_targets.extend(
+            clean[mask].cpu().numpy()
+        )
+
+        # -------------------------
+        # Diagnosis evaluation
+        # -------------------------
+        probs = torch.softmax(diag_logits, dim=-1)
+
+        diag_preds.extend(probs.argmax(-1).cpu().numpy())
+        diag_targets.extend(labels.cpu().numpy())
+        diag_probs_all.extend(probs.cpu().numpy())
+
+# Convert to arrays for sklearn metrics
+repair_preds   = np.array(repair_preds)
+repair_targets = np.array(repair_targets)
+diag_preds     = np.array(diag_preds)
+diag_targets   = np.array(diag_targets)
+diag_probs_all = np.array(diag_probs_all)
+
+
+# ============================================================
+# C — Repair performance analysis
+# ============================================================
+
+repair_acc  = (repair_preds == repair_targets).mean() * 100
+repair_f1   = f1_score(repair_targets, repair_preds, average='macro') * 100
+
+repair_prec  = precision_score(repair_targets, repair_preds,
+                                average=None) * 100
+repair_rec   = recall_score(repair_targets, repair_preds,
+                             average=None) * 100
+
+print("\n" + "="*55)
+print("REPAIR PERFORMANCE")
+print("="*55)
+print(f"Accuracy : {repair_acc:.2f}%")
+print(f"Macro F1 : {repair_f1:.2f}%")
+
+for i, nuc in enumerate(NUCLEOTIDE_VOCAB):
+    print(f"{nuc}  Precision: {repair_prec[i]:.2f}% | Recall: {repair_rec[i]:.2f}%")
+
+
+# ============================================================
+# D — Diagnosis performance analysis
+# ============================================================
+
+diag_acc = (diag_preds == diag_targets).mean() * 100
+diag_f1  = f1_score(diag_targets, diag_preds, average='macro') * 100
+
+try:
+    diag_auc = roc_auc_score(
+        diag_targets,
+        diag_probs_all,
+        multi_class='ovr',
+        average='macro'
+    )
+except Exception:
+    diag_auc = float('nan')
+
+print("\n" + "="*55)
+print("DIAGNOSIS PERFORMANCE")
+print("="*55)
+print(f"Accuracy : {diag_acc:.2f}%")
+print(f"Macro F1 : {diag_f1:.2f}%")
+print(f"AUC-ROC  : {diag_auc:.4f}")
+
+print(classification_report(
+    diag_targets,
+    diag_preds,
+    target_names=DAMAGE_CLASSES
+))
+
+
+# ============================================================
+# E — Repair confusion matrix (biological error focus)
+# ============================================================
+
+cm = confusion_matrix(repair_targets, repair_preds)
+cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+
+fig, ax = plt.subplots(figsize=(6, 5))
+sns.heatmap(
+    cm_norm,
+    annot=True,
+    fmt='.2%',
+    cmap='Blues',
+    xticklabels=NUCLEOTIDE_VOCAB,
+    yticklabels=NUCLEOTIDE_VOCAB,
+    ax=ax
+)
+
+# Highlight biologically meaningful mutation patterns
+ax.add_patch(plt.Rectangle((3, 2), 1, 1, fill=False,
+                           edgecolor='red', lw=2.5))    # G→T
+ax.add_patch(plt.Rectangle((3, 1), 1, 1, fill=False,
+                           edgecolor='orange', lw=2.5))  # C→T
+
+ax.set_title(f"Repair Confusion Matrix | Sparsity {ckpt.get('sparsity',0)*100:.0f}%")
+ax.set_xlabel("Predicted Base")
+ax.set_ylabel("True Base")
+
+plt.tight_layout()
+plt.savefig("repair_confusion.png", dpi=150)
+plt.show()
+
+
+# ============================================================
+# F — Diagnosis confusion matrix
+# ============================================================
+
+cm = confusion_matrix(diag_targets, diag_preds)
+cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+
+fig, ax = plt.subplots(figsize=(6, 5))
+sns.heatmap(
+    cm_norm,
+    annot=True,
+    fmt='.2%',
+    cmap='Purples',
+    xticklabels=DAMAGE_CLASSES,
+    yticklabels=DAMAGE_CLASSES,
+    ax=ax
+)
+
+ax.set_title(f"Diagnosis Confusion Matrix | Sparsity {ckpt.get('sparsity',0)*100:.0f}%")
+ax.set_xlabel("Predicted Class")
+ax.set_ylabel("True Class")
+
+plt.tight_layout()
+plt.savefig("diagnosis_confusion.png", dpi=150)
+plt.show()
+
+
+# ============================================================
+# G — ROC-AUC curves (class-wise separability)
+# ============================================================
+
+y_bin = label_binarize(
+    diag_targets,
+    classes=list(range(len(DAMAGE_CLASSES)))
+)
+
+fig, ax = plt.subplots(figsize=(7, 6))
+
+for i, cls in enumerate(DAMAGE_CLASSES):
+    fpr, tpr, _ = roc_curve(y_bin[:, i], diag_probs_all[:, i])
+    auc_i = roc_auc_score(y_bin[:, i], diag_probs_all[:, i])
+
+    ax.plot(fpr, tpr, label=f"{cls} (AUC={auc_i:.3f})")
+
+ax.plot([0, 1], [0, 1], 'k--', lw=1)
+ax.set_title("ROC-AUC per Damage Class")
+ax.set_xlabel("False Positive Rate")
+ax.set_ylabel("True Positive Rate")
+ax.legend()
+ax.grid(alpha=0.3)
+
+plt.tight_layout()
+plt.savefig("auc_curve.png", dpi=150)
+plt.show()
+
+
+# ============================================================
+# H — Ablation comparison (fixed results summary)
+# ============================================================
+
+sparsities = [0, 20, 40, 60]
+
+repair_results = {
+    'Curriculum': [83.61, 78.02, 66.68, 54.16],
+    'Fixed':      [80.63, 68.79, 47.14,  9.77],
+    'Random':     [77.63, 69.41, 60.52, 52.50],
+}
+
+diag_results = {
+    'Curriculum': [99.53, 97.91, 87.06, 67.50],
+    'Fixed':      [99.59, 25.00, 25.00, 27.88],
+    'Random':     [35.31, 43.69, 58.25, 65.72],
+}
+
+print("Ablation summary ready for dissertation tables.")

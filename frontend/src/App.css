@@ -1,3 +1,9 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
 :root {
   --primary: #0d9488;
   --primary-hover: #0f766e;
@@ -43,8 +49,8 @@ body {
 
 .status-dot {
   font-size: 0.8rem;
-  color: #D4A017;
-  background: #FFF5C5;
+  color: #166534;
+  background: #dcfce7;
   padding: 4px 12px;
   border-radius: 20px;
   font-weight: 600;
@@ -497,4 +503,270 @@ h3 {
 
 .dot.error {
   background-color: #ef4444; /* Red */
+}
+
+.result-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--border, #334155);
+  background: transparent;
+  color: var(--text-muted, #94a3b8);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+
+/* ── Damage Report Card ───────────────── */
+.damage-report-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.damage-report-card h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+/* Gauge */
+.damage-gauge {
+  width: 100%;
+}
+
+.gauge-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.6;
+  margin-bottom: 6px;
+}
+
+.gauge-bar {
+  width: 100%;
+  height: 10px;
+  background: rgba(255,255,255,0.07);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.gauge-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 1s ease;
+}
+
+.gauge-values {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 0.85rem;
+}
+
+.severity-badge {
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  font-size: 0.8rem;
+}
+
+/* Damage types */
+.damage-types h4 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.55;
+  margin: 0 0 12px;
+}
+
+.damage-type-row {
+  margin-bottom: 16px;
+}
+
+.damage-type-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.damage-type-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.damage-confidence {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent, #2de2e2);
+}
+
+.damage-type-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(255,255,255,0.07);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.damage-type-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2de2e2, #818cf8);
+  border-radius: 99px;
+  transition: width 0.8s ease;
+}
+
+.damage-detail {
+  font-size: 0.75rem;
+  opacity: 0.5;
+  margin: 0;
+  font-style: italic;
+}
+
+/* Interpretation block */
+.damage-interpretation {
+  background: rgba(255,255,255,0.04);
+  border-left: 3px solid var(--accent, #22d3ee);
+  border-radius: 4px;
+  padding: 12px 14px;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+
+/* Empty state icon */
+.empty-icon {
+  font-size: 3rem;
+  margin-bottom: 12px;
+  opacity: 0.3;
+}
+.dna-loader {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.run-btn.loading {
+  background: var(--primary-hover);
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.compact-text:focus,
+.result-text:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(13,148,136,0.15);
+}
+
+
+.action-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.btn-small:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.empty-state.loading {
+  border-style: solid;
+}
+
+.tab-navigation {
+  display: flex;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  transition: all 0.3s ease;
+}
+
+.tab-btn:hover {
+  color: var(--primary-hover);
+}
+
+.tab-btn.active {
+  color: var(--primary);
+  border-bottom: 2px solid var(--primary);
+}
+
+/* Analysis Content */
+.analysis-tab-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.analysis-section {
+  padding: 15px;
+  background: #f8fafc; /* Matches your light app background */
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.analysis-section h4 {
+  margin: 0 0 15px 0;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--primary); /* Teal accents */
+}
+
+.analysis-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 0.95rem;
+  color: var(--text-main);
+}
+
+.analysis-val {
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+/* Ensure severity badges contrast well on light mode */
+.sev-high {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.sev-moderate {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.sev-low {
+  background: #ccfbf1;
+  color: #0d9488;
 }
